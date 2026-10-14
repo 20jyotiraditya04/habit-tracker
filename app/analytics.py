@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from typing import List, Optional, cast
 from sqlalchemy.orm import Session
 from sqlalchemy import func, desc, case
 from app.models import Workout, Exercise, ExerciseSet
@@ -46,10 +46,11 @@ def get_workout_summary(workout_id: str, db: Session) -> Optional[WorkoutSummary
             best_estimated_1rm=round(best_1rm,2)
         ))
 
-    return WorkoutSummary(
+    logged_at_value = cast(datetime, workout.logged_at or datetime.now(timezone.utc))
 
+    return WorkoutSummary(
         workout_id=str(workout.id),
-        logged_at=workout.logged_at,
+        logged_at=logged_at_value,
         total_workout_volume=round(total_workout_volume,2),
         exercises=exercise_summaries,
     )
