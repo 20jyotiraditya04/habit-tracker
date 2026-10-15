@@ -1,6 +1,10 @@
 from typing import List, Optional
 from datetime import datetime
 from pydantic import BaseModel, field_validator
+from pydantic import Field
+
+
+
 
 class ExerciseStats(BaseModel):
     exercise_name: str
@@ -43,3 +47,11 @@ class ExerciseBase(BaseModel):
 
 class WorkoutParsed(BaseModel):
     exercises: list[ExerciseBase]
+
+
+
+class SetUpdate(BaseModel):
+    """ Fields that can be updated for an existing exercise set."""
+    reps:Optional[int]=Field(default=None, ge=0)
+    weight_kg:Optional[float]=Field(default=None, ge=0)
+    rpe:Optional[float]=Field(default=None, ge=1, le=10)

@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from sqlalchemy import Column, String, Integer, Numeric, Text, DateTime, ForeignKey, CheckConstraint
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import declarative_base, relationship
+from sqlalchemy.orm import declarative_base, relationship, Mapped, mapped_column
 
 Base = declarative_base()
 
@@ -33,7 +33,7 @@ class ExerciseSet(Base):
     __tablename__ = "exercise_sets"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     exercise_id = Column(UUID(as_uuid=True), ForeignKey("exercises.id", ondelete="CASCADE"), nullable=False)
-    set_number = Column(Integer, nullable=False)
+    set_number : Mapped[int] = mapped_column(Integer, nullable=False)
     reps = Column(Integer, nullable=False)
     weight_kg = Column(Numeric(5, 2), default=0.0)
     rpe = Column(Integer, nullable=True)

@@ -1,20 +1,22 @@
+from decimal import Decimal
 import os
 import shutil
 import tempfile
 import json
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, cast
 import re
-
+from uuid import UUID
 from dotenv import load_dotenv
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
 from pydantic import BaseModel, Field, field_validator
 from openai import OpenAI
 from faster_whisper import WhisperModel
 from sqlalchemy import create_engine
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker, Session, joinedload
 from app.analytics import get_workout_summary, get_weekly_volume_comparison
-from app.schemas import WorkoutSummary, WeeklyVolumeComparison
+from app.schemas import WorkoutSummary, WeeklyVolumeComparison, SetUpdate
 from app.models import Base, Workout, Exercise, ExerciseSet
 
 # Locate .env at the root of habit-tracker
@@ -103,9 +105,10 @@ def get_workouts(limit: int = 50, db: Session = Depends(get_db)):
                         "name": ex.name,
                         "sets": [
                             {
+                                "id": str(s.id),
                                 "set_number": s.set_number,
-                                "reps": s.reps or 0,
-                                "weight_kg": s.weight_kg or 0.0,
+                                "reps": s.reps if s.reps is not None else 0,
+                                "weight_kg": float(s.weight_kg or 0.0),
                                 "rpe": s.rpe,
                             }
                             for s in ex.sets
@@ -116,6 +119,148 @@ def get_workouts(limit: int = 50, db: Session = Depends(get_db)):
             },
         })
     return results
+
+
+@app.patch("/sets/{set_id}")
+def update_set(
+    set_id:UUID,
+    payload:SetUpdate,
+    db: Session=Depends(get_db),
+):
+    """Update reps, weight, and/or RPE for a single exercise set."""
+    exercise_set=(
+        db.query(ExerciseSet)
+        .filter(ExerciseSet.id==set_id)
+        .first()
+    )
+
+    if exercise_set is None:
+        raise HTTPException(status_code=404, detail="Set not found")
+
+    updates=payload.model_dump(exclude_unset=True)
+
+    if not updates:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide atleast one field to update",
+        )
+
+
+    for field in ("reps", "weight_kg"):
+        if field in updates and updates[field] is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{field} cannot be null",
+            )
+
+    try:
+        for field, value in updates.items():
+            setattr(exercise_set, field, value)
+
+        db.commit()
+        db.refresh(exercise_set)
+        weight =cast(Decimal|float| None, exercise_set.weight_kg)
+        return {
+            "status": "success",
+            "message": "Set Updated Successfully",
+            "set": {
+                "id": str(exercise_set.id),
+                "set_number": exercise_set.set_number,
+                "reps": exercise_set.reps,
+                "weight_kg": float(weight or 0.0),
+                "rpe": exercise_set.rpe,
+            }
+        }
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="An error occurred while updating the set",
+        )
+
+@app.delete("/sets/{set_id}")
+
+def delete_set(
+    set_id:UUID,
+    db: Session=Depends(get_db),
+    ):
+    """Delete a single exercise set and renumber the remaining sets."""
+
+    exercise_set=(
+        db.query(ExerciseSet)
+        .filter(ExerciseSet.id==set_id)
+        .first()
+    )
+    if exercise_set is None:
+        raise HTTPException(status_code=404,
+                            detail="Set not found")
+
+    exercise_id=exercise_set.exercise_id
+
+
+    try:
+        db.delete(exercise_set)
+        db.flush()
+
+        remaining_sets=(
+            db.query(ExerciseSet)
+            .filter(ExerciseSet.exercise_id==exercise_id)
+            .order_by(
+                ExerciseSet.set_number,
+                ExerciseSet.id,
+            )
+            .all()
+        )
+        for number, remaining_set in enumerate(
+            remaining_sets, start=1
+        ):
+            remaining_set.set_number=number
+
+        db.commit()
+        return {
+            "status": "success",
+            "message":"set deleted successfully",
+            "deleted_set_id": str(set_id),
+            "remaining_sets":len(remaining_sets),
+        }
+
+    except SQLAlchemyError:
+        db.rollback()
+        return HTTPException(
+            status_code=500,
+            detail="Failed to delete set",
+        )
+
+@app.delete("/workouts/{workout_id}")
+def delete_workout(
+    workout_id:UUID,
+    db: Session=Depends(get_db),
+):
+    """Delete a workout and all associated exercises and sets."""
+    workout=(
+        db.query(Workout)
+        .filter(Workout.id==workout_id)
+        .first()
+    )
+    if workout is None:
+        raise HTTPException(status_code=404, detail="Workout not found")
+
+    try:
+        db.delete(workout)
+        db.commit()
+        return {
+            "status": "success",
+            "message": "Workout deleted successfully",
+            "deleted_workout_id": str(workout_id),
+        }
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to delete workout",
+        )
+    
+
 
 
 @app.get("/analytics/workout-summary/{workout_id}", response_model=WorkoutSummary)
